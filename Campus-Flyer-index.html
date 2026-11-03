@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campus Flyer</title>
+<style>
+  :root { color-scheme: dark; --ink:#10253b; --cream:#fff8e9; --gold:#ffd166; }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; min-height:100vh; padding:24px 14px 36px;
+    font-family: ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color:#f8fbff; background:radial-gradient(circle at 15% 5%,#234b70 0,#10263e 48%,#091725 100%);
+    display:flex; flex-direction:column; align-items:center; gap:16px;
+  }
+  header { width:min(960px,100%); text-align:center; }
+  h1 { margin:0; font-size:clamp(2rem,6vw,3.3rem); letter-spacing:.04em; }
+  header p { margin:7px 0 0; color:#c6d9e8; }
+  .panel {
+    width:min(960px,100%); padding:14px; border:1px solid #ffffff25;
+    border-radius:22px; background:#ffffff0d; box-shadow:0 18px 55px #0005;
+  }
+  .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; }
+  .upload {
+    display:flex; align-items:center; gap:8px; padding:10px 13px; border-radius:12px;
+    background:#ffffff12; border:1px solid #ffffff35; color:#f8fbff; font-size:.92rem;
+  }
+  input[type=file] { max-width:190px; color:#d9e8f4; }
+  button {
+    border:0; border-radius:12px; padding:11px 18px; cursor:pointer;
+    font-weight:800; color:#173047; background:var(--gold); font-size:.95rem;
+  }
+  button.secondary { color:#f8fbff; background:#ffffff1a; border:1px solid #ffffff35; }
+  button:focus-visible, input:focus-visible { outline:3px solid #fff; outline-offset:3px; }
+  .game-wrap { position:relative; width:min(900px,100%); margin:0 auto; overflow:hidden; border-radius:18px; background:#9ce3f5; }
+  canvas { display:block; width:100%; height:auto; aspect-ratio: 900 / 520; touch-action:none; }
+  .hud {
+    position:absolute; top:12px; left:14px; right:14px; display:flex; justify-content:space-between;
+    pointer-events:none; font-weight:900; text-shadow:0 2px 5px #1238; font-size:clamp(1rem,3vw,1.35rem);
+  }
+  .overlay {
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; padding:20px; background:#0c223b66; backdrop-filter:blur(3px);
+  }
+  .overlay.hidden { display:none; }
+  .overlay h2 { margin:0 0 8px; font-size:clamp(1.7rem,5vw,2.7rem); }
+  .overlay p { margin:5px 0 15px; max-width:440px; line-height:1.45; }
+  .hint { color:#d4e4ef; text-align:center; font-size:.9rem; margin:12px 0 0; }
+  .status { text-align:center; color:#c6d9e8; font-size:.86rem; margin-top:10px; min-height:1.2em; }
+  @media(max-width:600px) {
+    body { padding:16px 9px 24px; }
+    .panel { padding:9px; border-radius:17px; }
+    .toolbar { justify-content:stretch; }
+    .upload { width:100%; justify-content:space-between; }
+    input[type=file] { max-width:58%; }
+    button { flex:1; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎓 CAMPUS FLYER</h1>
+  <p>Your face. Your soundtrack. One campus adventure.</p>
+</header>
+
+<section class="panel" aria-label="Game controls">
+  <div class="toolbar">
+    <label class="upload">🧑 Character photo <input id="photoInput" type="file" accept="image/*"></label>
+    <label class="upload">🎵 Your MP3 <input id="musicInput" type="file" accept="audio/mpeg,audio/*"></label>
+    <button id="startBtn">Start game</button>
+    <button id="muteBtn" class="secondary" aria-pressed="false">Mute music</button>
+  </div>
+  <div class="status" id="status">Choose a photo and MP3, then press Start game. You can also play with the default character.</div>
+</section>
+
+<main class="panel">
+  <div class="game-wrap">
+    <canvas id="game" width="900" height="520" aria-label="Campus Flyer game. Tap, click, or press Space to fly."></canvas>
+    <div class="hud"><span id="score">SCORE: 0</span><span id="best">BEST: 0</span></div>
+    <div class="overlay" id="overlay">
+      <h2 id="overlayTitle">Ready to fly?</h2>
+      <p id="overlayText">Fly across campus, pass between the gates and try to beat your best score.</p>
+      <button id="overlayBtn">Let's fly!</button>
+    </div>
+  </div>
+  <p class="hint">Tap / click / press <b>Space</b> to flap upward · Avoid the campus gates · Press <b>R</b> to restart</p>
+</main>
+
+<audio id="music" loop></audio>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const photoInput = document.getElementById('photoInput');
+  const musicInput = document.getElementById('musicInput');
+  const music = document.getElementById('music');
+  const statusEl = document.getElementById('status');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlayTitle');
+  const overlayText = document.getElementById('overlayText');
+  const overlayBtn = document.getElementById('overlayBtn');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const startBtn = document.getElementById('startBtn');
+  const muteBtn = document.getElementById('muteBtn');
+
+  const W = canvas.width, H = canvas.height;
+  let photo = null, photoURL = null, musicURL = null;
+  let state = 'ready', score = 0, best = Number(localStorage.getItem('campusFlyerBest') || 0);
+  let lastTime = 0, world = 0, pipes = [], spawnTimer = 0;
+  const player = { x: 190, y: 245, vy: 0, r: 25 };
+  const gravity = 1250, flapPower = -390, speed = 245, gap = 166, pipeWidth = 82;
+  bestEl.textContent = 'BEST: ' + best;
+
+  function roundedRect(x,y,w,h,r,fill) {
+    ctx.fillStyle = fill; ctx.beginPath();
+    ctx.roundRect(x,y,w,h,r); ctx.fill();
+  }
+  function drawCloud(x,y,s=1) {
+    ctx.fillStyle = '#ffffffb9'; ctx.beginPath();
+    ctx.arc(x,y,20*s,0,Math.PI*2); ctx.arc(x+22*s,y-10*s,25*s,0,Math.PI*2);
+    ctx.arc(x+48*s,y,19*s,0,Math.PI*2); ctx.fill();
+  }
+  function drawCampus() {
+    const sky = ctx.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0,'#69c8ef'); sky.addColorStop(.72,'#d4f4ed'); sky.addColorStop(1,'#b4e2b5');
+    ctx.fillStyle = sky; ctx.fillRect(0,0,W,H);
+    drawCloud(115-(world*.12%1100),85,.9); drawCloud(480-(world*.08%1100),130,.65);
+    drawCloud(820-(world*.1%1100),65,.8);
+    // distant hills
+    ctx.fillStyle='#8bcf9b'; ctx.beginPath(); ctx.moveTo(0,350);
+    for(let x=0;x<=W;x+=30) ctx.lineTo(x,310+Math.sin((x+world*.12)*.012)*23);
+    ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.fill();
+    // campus buildings scroll
+    for(let i=0;i<5;i++){
+      const bx = ((i*245 - (world*.35)%1225)+1225)%1225 - 120;
+      const by = 205 + (i%2)*22, bw=155, bh=150-(i%2)*15;
+      ctx.fillStyle='#f4dfb8'; ctx.fillRect(bx,by,bw,bh);
+      ctx.fillStyle='#bd7852'; ctx.beginPath(); ctx.moveTo(bx-10,by);ctx.lineTo(bx+bw/2,by-48);ctx.lineTo(bx+bw+10,by);ctx.fill();
+      ctx.fillStyle='#4b8295'; for(let wx=0;wx<4;wx++) for(let wy=0;wy<2;wy++) ctx.fillRect(bx+17+wx*35,by+25+wy*42,19,25);
+      ctx.fillStyle='#805b43';ctx.fillRect(bx+65,by+95,27,55);
+      ctx.fillStyle='#fff4d7';ctx.font='bold 12px system-ui';ctx.textAlign='center';ctx.fillText('CAMPUS',bx+bw/2,by-9);
+    }
+    // trees
+    for(let i=0;i<9;i++){
+      const tx=((i*130-(world*.65)%1170)+1170)%1170;
+      ctx.fillStyle='#79553a';ctx.fillRect(tx+13,365,12,55);
+      ctx.fillStyle=i%2?'#27865b':'#3c9b61';ctx.beginPath();ctx.arc(tx+19,355,28,0,Math.PI*2);ctx.fill();
+    }
+    // path and grass
+    ctx.fillStyle='#72bd65';ctx.fillRect(0,420,W,100);
+    ctx.fillStyle='#d9c69a';ctx.fillRect(0,455,W,25);
+    ctx.fillStyle='#f6e9c8';ctx.fillRect(0,458,W,3);
+    for(let i=0;i<22;i++){const x=((i*53-(world*.9)%1166)+1166)%1166;ctx.fillStyle='#4b9a56';ctx.fillRect(x,430+(i%3)*8,3,10);}
+  }
+  function drawPipe(p) {
+    const cap=13;
+    // upper/lower campus gate pillars
+    const drawPillar=(x,y,w,h,upper)=>{
+      const grad=ctx.createLinearGradient(x,0,x+w,0);grad.addColorStop(0,'#b86a3e');grad.addColorStop(.5,'#f2b36d');grad.addColorStop(1,'#99502f');
+      ctx.fillStyle=grad;ctx.fillRect(x,y,w,h);
+      ctx.fillStyle='#75452f';ctx.fillRect(x-6,upper?y+h-12:y,w+12,12);
+      ctx.fillStyle='#ffe0a6';ctx.fillRect(x+9,y+8,5,Math.max(0,h-16));
+    };
+    drawPillar(p.x,0,pipeWidth,p.top,true);
+    drawPillar(p.x,p.top+gap,pipeWidth,H-(p.top+gap)-70,false);
+    ctx.fillStyle='#5d3d2b';ctx.font='bold 10px system-ui';ctx.textAlign='center';
+    ctx.fillText('GATE',p.x+pipeWidth/2,Math.max(15,p.top-10));
+  }
+  function drawPlayer() {
+    ctx.save(); ctx.translate(player.x,player.y);
+    ctx.rotate(Math.max(-.45,Math.min(.65,player.vy/650)));
+    ctx.shadowColor='#17334b55';ctx.shadowBlur=10;ctx.shadowOffsetY=4;
+    ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(0,0,player.r+4,0,Math.PI*2);ctx.fill();
+    ctx.save();ctx.beginPath();ctx.arc(0,0,player.r,0,Math.PI*2);ctx.clip();
+    if(photo && photo.complete && photo.naturalWidth) {
+      const scale=Math.max((player.r*2)/photo.width,(player.r*2)/photo.height);
+      const sw=photo.width*scale, sh=photo.height*scale;
+      ctx.drawImage(photo,-sw/2,-sh/2,sw,sh);
+    } else {
+      const g=ctx.createLinearGradient(-25,-25,25,25);g.addColorStop(0,'#ffda79');g.addColorStop(1,'#ef8c49');
+      ctx.fillStyle=g;ctx.fillRect(-player.r,-player.r,player.r*2,player.r*2);
+      ctx.fillStyle='#18334b';ctx.font='bold 25px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('YOU',0,1);
+    }
+    ctx.restore();
+    ctx.shadowColor='transparent';ctx.fillStyle='#17334b';ctx.beginPath();ctx.arc(8,-6,3,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+  function draw() {
+    drawCampus();
+    pipes.forEach(drawPipe);
+    drawPlayer();
+    if(state==='ready'){
+      ctx.fillStyle='#17334b';ctx.textAlign='center';ctx.font='bold 19px system-ui';
+      ctx.fillText('YOUR CAMPUS ADVENTURE STARTS HERE',W/2, H-22);
+    }
+  }
+  function update(dt) {
+    world += speed*dt;
+    player.vy += gravity*dt; player.y += player.vy*dt;
+    spawnTimer += dt;
+    if(spawnTimer>1.55){spawnTimer=0;const top=85+Math.random()*190;pipes.push({x:W+30,top,passed:false});}
+    pipes.forEach(p=>{
+      p.x-=speed*dt;
+      if(!p.passed && p.x+pipeWidth<player.x){p.passed=true;score++;scoreEl.textContent='SCORE: '+score;}
+      const withinX=player.x+player.r-5>p.x && player.x-player.r+5<p.x+pipeWidth;
+      if(withinX && (player.y-player.r+5<p.top || player.y+player.r-5>p.top+gap)) endGame();
+    });
+    pipes=pipes.filter(p=>p.x+pipeWidth>-20);
+    if(player.y-player.r<0 || player.y+player.r>H-70) endGame();
+  }
+  function loop(t) {
+    const dt=Math.min((t-lastTime)/1000||0, .035);lastTime=t;
+    if(state==='playing') update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  function flap() {
+    if(state==='ready'){startGame();return;}
+    if(state==='playing') player.vy=flapPower;
+    else if(state==='over') startGame();
+  }
+  function startGame() {
+    score=0;scoreEl.textContent='SCORE: 0';pipes=[];spawnTimer=0;
+    player.y=245;player.vy=0;world=0;state='playing';lastTime=0;
+    overlay.classList.add('hidden');
+    if(music.src && !music.muted) music.play().catch(()=>{});
+  }
+  function endGame() {
+    if(state!=='playing')return;
+    state='over';music.pause();
+    if(score>best){best=score;localStorage.setItem('campusFlyerBest',best);bestEl.textContent='BEST: '+best;}
+    overlayTitle.textContent='Game over!';
+    overlayText.textContent=`You scored ${score}. Best score: ${best}. Ready for another flight?`;
+    overlayBtn.textContent='Play again';
+    overlay.classList.remove('hidden');
+  }
+  function setReadyOverlay() {
+    overlayTitle.textContent='Ready to fly?';
+    overlayText.textContent='Fly across campus, pass between the gates and try to beat your best score.';
+    overlayBtn.textContent="Let's fly!";
+    overlay.classList.remove('hidden');
+  }
+
+  canvas.addEventListener('pointerdown',e=>{e.preventDefault();flap();});
+  window.addEventListener('keydown',e=>{
+    if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();flap();}
+    if(e.key.toLowerCase()==='r'){startGame();}
+  });
+  startBtn.addEventListener('click',startGame);
+  overlayBtn.addEventListener('click',startGame);
+  muteBtn.addEventListener('click',()=>{
+    music.muted=!music.muted;
+    muteBtn.textContent=music.muted?'Unmute music':'Mute music';
+    muteBtn.setAttribute('aria-pressed',String(music.muted));
+  });
+  photoInput.addEventListener('change',e=>{
+    const file=e.target.files[0];if(!file)return;
+    if(photoURL)URL.revokeObjectURL(photoURL);
+    photoURL=URL.createObjectURL(file);photo=new Image();
+    photo.onload=()=>{statusEl.textContent='Photo loaded! Your face is now the flying character.';};
+    photo.onerror=()=>{statusEl.textContent='Could not load that image. Try a JPG or PNG.';};
+    photo.src=photoURL;
+  });
+  musicInput.addEventListener('change',e=>{
+    const file=e.target.files[0];if(!file)return;
+    if(musicURL)URL.revokeObjectURL(musicURL);
+    musicURL=URL.createObjectURL(file);music.src=musicURL;music.load();
+    statusEl.textContent='Music loaded! It will start when you begin playing.';
+  });
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)music.pause();});
+  setReadyOverlay();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
